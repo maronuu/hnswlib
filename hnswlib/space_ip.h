@@ -3,19 +3,35 @@
 
 namespace hnswlib {
 
-static float
+template<typename dist_t, typename data_t = dist_t, int K = 1>
+static dist_t
 InnerProduct(const void *pVect1, const void *pVect2, const void *qty_ptr) {
     size_t qty = *((size_t *) qty_ptr);
-    float res = 0;
-    for (unsigned i = 0; i < qty; i++) {
-        res += ((float *) pVect1)[i] * ((float *) pVect2)[i];
+    dist_t res = 0;
+    data_t *a = (data_t *)pVect1;
+    data_t *b = (data_t *)pVect2;
+
+    qty = qty / K;
+
+    for (size_t i = 0; i < qty; i++)
+    {
+        for (size_t j = 0; j < K; j++)
+        {
+            const size_t index = (i * K) + j;
+            const dist_t _a = a[index];
+            const dist_t _b = b[index];
+            res += _a * _b;
+        }
     }
-    return res;
+
+    return static_cast<dist_t>(res);
 }
 
-static float
-InnerProductDistance(const void *pVect1, const void *pVect2, const void *qty_ptr) {
-    return 1.0f - InnerProduct(pVect1, pVect2, qty_ptr);
+template <typename dist_t, typename data_t = dist_t>
+static dist_t
+InnerProductDistance(const void *pVect1, const void *pVect2, const void *qty_ptr)
+{
+    return static_cast<dist_t>(1.0) - InnerProduct<dist_t, data_t>(pVect1, pVect2, qty_ptr);
 }
 
 #if defined(USE_AVX)
@@ -294,7 +310,7 @@ InnerProductDistanceSIMD16ExtResiduals(const void *pVect1v, const void *pVect2v,
     float *pVect2 = (float *) pVect2v + qty16;
 
     size_t qty_left = qty - qty16;
-    float res_tail = InnerProduct(pVect1, pVect2, &qty_left);
+    float res_tail = InnerProduct<float, float>(pVect1, pVect2, &qty_left);
     return 1.0f - (res + res_tail);
 }
 
@@ -308,20 +324,22 @@ InnerProductDistanceSIMD4ExtResiduals(const void *pVect1v, const void *pVect2v, 
 
     float *pVect1 = (float *) pVect1v + qty4;
     float *pVect2 = (float *) pVect2v + qty4;
-    float res_tail = InnerProduct(pVect1, pVect2, &qty_left);
+    float res_tail = InnerProduct<float, float>(pVect1, pVect2, &qty_left);
 
     return 1.0f - (res + res_tail);
 }
 #endif
 
-class InnerProductSpace : public SpaceInterface<float> {
-    DISTFUNC<float> fstdistfunc_;
+template <typename dist_t, typename data_t = dist_t>
+class InnerProductSpace : public SpaceInterface<dist_t>
+{
+    DISTFUNC<dist_t> fstdistfunc_;
     size_t data_size_;
     size_t dim_;
 
  public:
     InnerProductSpace(size_t dim) {
-        fstdistfunc_ = InnerProductDistance;
+        fstdistfunc_ = InnerProductDistance<dist_t, data_t>;
 #if defined(USE_AVX) || defined(USE_SSE) || defined(USE_AVX512)
     #if defined(USE_AVX512)
         if (AVX512Capable()) {
@@ -342,8 +360,19 @@ class InnerProductSpace : public SpaceInterface<float> {
             InnerProductSIMD4Ext = InnerProductSIMD4ExtAVX;
             InnerProductDistanceSIMD4Ext = InnerProductDistanceSIMD4ExtAVX;
         }
-    #endif
-
+    #endif // TODO: suport SIMD for any dim (now, only for dim % 4 = 0)
+        if (dim % 128 == 0)
+            fstdistfunc_ = InnerProduct<dist_t, data_t, 128>;
+        else if (dim % 64 == 0)
+            fstdistfunc_ = InnerProduct<dist_t, data_t, 64>;
+        else if (dim % 32 == 0)
+            fstdistfunc_ = InnerProduct<dist_t, data_t, 32>;
+        else if (dim % 16 == 0)
+            fstdistfunc_ = InnerProduct<dist_t, data_t, 16>;
+        else if (dim % 8 == 0)
+            fstdistfunc_ = InnerProduct<dist_t, data_t, 8>;
+        else if (dim % 4 == 0)
+            fstdistfunc_ = InnerProduct<dist_t, data_t, 4>;
         if (dim % 16 == 0)
             fstdistfunc_ = InnerProductDistanceSIMD16Ext;
         else if (dim % 4 == 0)
@@ -354,14 +383,14 @@ class InnerProductSpace : public SpaceInterface<float> {
             fstdistfunc_ = InnerProductDistanceSIMD4ExtResiduals;
 #endif
         dim_ = dim;
-        data_size_ = dim * sizeof(float);
+        data_size_ = dim * sizeof(data_t);
     }
 
     size_t get_data_size() {
         return data_size_;
     }
 
-    DISTFUNC<float> get_dist_func() {
+    DISTFUNC<dist_t> get_dist_func() {
         return fstdistfunc_;
     }
 

@@ -142,7 +142,7 @@ inline std::vector<size_t> get_input_ids_and_check_shapes(const py::object& ids_
 }
 
 
-template<typename dist_t, typename data_t = float>
+template<typename dist_t, typename data_t = dist_t>
 class Index {
  public:
     static const int ser_version = 1;  // serialization version
@@ -158,7 +158,7 @@ class Index {
     int num_threads_default;
     hnswlib::labeltype cur_l;
     hnswlib::HierarchicalNSW<dist_t>* appr_alg;
-    hnswlib::SpaceInterface<float>* l2space;
+    hnswlib::SpaceInterface<dist_t>* l2space;
 
 
     Index(const std::string &space_name, const int dim) : space_name(space_name), dim(dim) {
@@ -166,7 +166,7 @@ class Index {
         if (space_name == "l2") {
             l2space = new hnswlib::L2Space(dim);
         } else if (space_name == "ip") {
-            l2space = new hnswlib::InnerProductSpace(dim);
+            l2space = new hnswlib::InnerProductSpace<dist_t, data_t>(dim);
         } else if (space_name == "cosine") {
             l2space = new hnswlib::InnerProductSpace(dim);
             normalize = true;
@@ -235,8 +235,8 @@ class Index {
     }
 
 
-    void normalize_vector(float* data, float* norm_array) {
-        float norm = 0.0f;
+    void normalize_vector(data_t* data, data_t* norm_array) {
+        data_t norm = 0.0f;
         for (int i = 0; i < dim; i++)
             norm += data[i] * data[i];
         norm = 1.0f / (sqrtf(norm) + 1e-30f);
@@ -246,7 +246,7 @@ class Index {
 
 
     void addItems(py::object input, py::object ids_ = py::none(), int num_threads = -1, bool replace_deleted = false) {
-        py::array_t < dist_t, py::array::c_style | py::array::forcecast > items(input);
+        py::array_t < data_t, py::array::c_style | py::array::forcecast > items(input);
         auto buffer = items.request();
         if (num_threads <= 0)
             num_threads = num_threads_default;
@@ -268,8 +268,8 @@ class Index {
             int start = 0;
             if (!ep_added) {
                 size_t id = ids.size() ? ids.at(0) : (cur_l);
-                float* vector_data = (float*)items.data(0);
-                std::vector<float> norm_array(dim);
+                data_t* vector_data = (data_t*)items.data(0);
+                std::vector<data_t> norm_array(dim);
                 if (normalize) {
                     normalize_vector(vector_data, norm_array.data());
                     vector_data = norm_array.data();
@@ -286,11 +286,11 @@ class Index {
                     appr_alg->addPoint((void*)items.data(row), (size_t)id, replace_deleted);
                     });
             } else {
-                std::vector<float> norm_array(num_threads * dim);
+                std::vector<data_t> norm_array(num_threads * dim);
                 ParallelFor(start, rows, num_threads, [&](size_t row, size_t threadId) {
                     // normalize vector:
                     size_t start_idx = threadId * dim;
-                    normalize_vector((float*)items.data(row), (norm_array.data() + start_idx));
+                    normalize_vector((data_t*)items.data(row), (norm_array.data() + start_idx));
 
                     size_t id = ids.size() ? ids.at(row) : (cur_l + row);
                     appr_alg->addPoint((void*)(norm_array.data() + start_idx), (size_t)id, replace_deleted);
@@ -301,7 +301,7 @@ class Index {
     }
 
 
-    std::vector<std::vector<data_t>> getDataReturnList(py::object ids_ = py::none()) {
+    py::array_t<data_t> getDataReturnNumpy(py::object ids_ = py::none()) {
         std::vector<size_t> ids;
         if (!ids_.is_none()) {
             py::array_t < size_t, py::array::c_style | py::array::forcecast > items(ids_);
@@ -318,11 +318,26 @@ class Index {
             }
         }
 
-        std::vector<std::vector<data_t>> data;
-        for (auto id : ids) {
-            data.push_back(appr_alg->template getDataByLabel<data_t>(id));
+        // std::vector<std::vector<data_t>> data;
+        // for (auto id : ids) {
+        //     data.push_back(appr_alg->template getDataByLabel<data_t>(id));
+        // }
+        // return data;
+
+        data_t *data_numpy = (data_t *)malloc(sizeof(data_t) * dim * ids.size());
+        for (int i = 0; i < ids.size(); i++) {
+            std::vector<data_t> vector = appr_alg->template getDataByLabel<data_t>(ids[i]);
+            std::copy(vector.begin(), vector.end(), data_numpy + (i * dim));
         }
-        return data;
+
+        py::capsule free_when_done(data_numpy, [](void *f)
+                                   { delete[] f; });
+
+        return py::array_t<data_t>(
+            {(size_t)ids.size(), (size_t)dim},      // shape
+            {dim * sizeof(data_t), sizeof(data_t)}, // strides
+            data_numpy,                             // the data pointer
+            free_when_done);
     }
 
 
@@ -452,7 +467,7 @@ class Index {
 
     py::dict getIndexParams() const { /* WARNING: Index::getAnnData is not thread-safe with Index::addItems */
         auto params = py::dict(
-            "ser_version"_a = py::int_(Index<float>::ser_version),  // serialization version
+            "ser_version"_a = py::int_(Index<dist_t, data_t>::ser_version),  // serialization version
             "space"_a = space_name,
             "dim"_a = dim,
             "index_inited"_a = index_inited,
@@ -470,15 +485,15 @@ class Index {
     }
 
 
-    static Index<float>* createFromParams(const py::dict d) {
+    static Index<dist_t, data_t>* createFromParams(const py::dict d) {
         // check serialization version
-        assert_true(((int)py::int_(Index<float>::ser_version)) >= d["ser_version"].cast<int>(), "Invalid serialization version!");
+        assert_true(((int)py::int_(Index<dist_t, data_t>::ser_version)) >= d["ser_version"].cast<int>(), "Invalid serialization version!");
 
         auto space_name_ = d["space"].cast<std::string>();
         auto dim_ = d["dim"].cast<int>();
         auto index_inited_ = d["index_inited"].cast<bool>();
 
-        Index<float>* new_index = new Index<float>(space_name_, dim_);
+        Index<dist_t, data_t>* new_index = new Index<dist_t, data_t>(space_name_, dim_);
 
         /*  TODO: deserialize state of random generators into new_index->level_generator_ and new_index->update_probability_generator_  */
         /*        for full reproducibility / state of generators is serialized inside Index::getIndexParams                      */
@@ -506,7 +521,7 @@ class Index {
     }
 
 
-    static Index<float> * createFromIndex(const Index<float> & index) {
+    static Index<dist_t, data_t> * createFromIndex(const Index<dist_t, data_t> & index) {
         return createFromParams(index.getIndexParams());
     }
 
@@ -602,7 +617,7 @@ class Index {
         size_t k = 1,
         int num_threads = -1,
         const std::function<bool(hnswlib::labeltype)>& filter = nullptr) {
-        py::array_t < dist_t, py::array::c_style | py::array::forcecast > items(input);
+        py::array_t < data_t, py::array::c_style | py::array::forcecast > items(input);
         auto buffer = items.request();
         hnswlib::labeltype* data_numpy_l;
         dist_t* data_numpy_d;
@@ -642,12 +657,12 @@ class Index {
                     }
                 });
             } else {
-                std::vector<float> norm_array(num_threads * features);
+                std::vector<data_t> norm_array(num_threads * features);
                 ParallelFor(0, rows, num_threads, [&](size_t row, size_t threadId) {
-                    float* data = (float*)items.data(row);
+                    data_t* data = (data_t*)items.data(row);
 
                     size_t start_idx = threadId * dim;
-                    normalize_vector((float*)items.data(row), (norm_array.data() + start_idx));
+                    normalize_vector((data_t*)items.data(row), (norm_array.data() + start_idx));
 
                     std::priority_queue<std::pair<dist_t, hnswlib::labeltype >> result = appr_alg->searchKnn(
                         (void*)(norm_array.data() + start_idx), k, p_idFilter);
@@ -710,7 +725,7 @@ class Index {
     }
 };
 
-template<typename dist_t, typename data_t = float>
+template<typename dist_t, typename data_t = dist_t>
 class BFIndex {
  public:
     static const int ser_version = 1;  // serialization version
@@ -725,12 +740,12 @@ class BFIndex {
     hnswlib::SpaceInterface<float>* space;
 
 
-    BFIndex(const std::string &space_name, const int dim) : space_name(space_name), dim(dim) {
+    BFIndex(const std::string &space_name, const size_t dim) : space_name(space_name), dim(dim) {
         normalize = false;
         if (space_name == "l2") {
             space = new hnswlib::L2Space(dim);
         } else if (space_name == "ip") {
-            space = new hnswlib::InnerProductSpace(dim);
+            space = new hnswlib::InnerProductSpace<dist_t, data_t>(dim);
         } else if (space_name == "cosine") {
             space = new hnswlib::InnerProductSpace(dim);
             normalize = true;
@@ -759,8 +774,8 @@ class BFIndex {
     }
 
 
-    void normalize_vector(float* data, float* norm_array) {
-        float norm = 0.0f;
+    void normalize_vector(data_t* data, data_t* norm_array) {
+        data_t norm = 0.0f;
         for (int i = 0; i < dim; i++)
             norm += data[i] * data[i];
         norm = 1.0f / (sqrtf(norm) + 1e-30f);
@@ -786,8 +801,8 @@ class BFIndex {
                 if (!normalize) {
                     alg->addPoint((void *) items.data(row), (size_t) id);
                 } else {
-                    std::vector<float> normalized_vector(dim);
-                    normalize_vector((float *)items.data(row), normalized_vector.data());
+                    std::vector<data_t> normalized_vector(dim);
+                    normalize_vector((data_t *)items.data(row), normalized_vector.data());
                     alg->addPoint((void *) normalized_vector.data(), (size_t) id);
                 }
             }
@@ -873,95 +888,115 @@ class BFIndex {
 };
 
 
-PYBIND11_PLUGIN(hnswlib) {
-        py::module m("hnswlib");
+template<typename T>
+inline const std::string typeName();
 
-        py::class_<Index<float>>(m, "Index")
-        .def(py::init(&Index<float>::createFromParams), py::arg("params"))
+template<> const std::string typeName<char>() { return "int8"; }
+template<> const std::string typeName<unsigned char>() { return "uint8"; }
+template<> const std::string typeName<short>() { return "int16"; }
+template<> const std::string typeName<unsigned short>() { return "uint16"; }
+template<> const std::string typeName<int>() { return "int32"; }
+template<> const std::string typeName<unsigned int>() { return "uint32"; }
+template<> const std::string typeName<float>() { return "float32"; }
+template<> const std::string typeName<long>() { return "int64"; }
+template<> const std::string typeName<unsigned long>() { return "uint64"; }
+template<> const std::string typeName<double>() { return "float64"; }
+
+template<typename dist_t, typename data_t>
+
+
+template<typename dist_t, typename data_t>
+inline void register_index_class(py::module &m, std::string className) {
+    py::class_<Index<dist_t, data_t>>(m, className.c_str())
+        .def(py::init(&Index<dist_t, data_t>::createFromParams), py::arg("params"))
            /* WARNING: Index::createFromIndex is not thread-safe with Index::addItems */
-        .def(py::init(&Index<float>::createFromIndex), py::arg("index"))
+        .def(py::init(&Index<dist_t, data_t>::createFromIndex), py::arg("index"))
         .def(py::init<const std::string &, const int>(), py::arg("space"), py::arg("dim"))
-        .def("init_index",
-            &Index<float>::init_new_index,
-            py::arg("max_elements"),
-            py::arg("M") = 16,
-            py::arg("ef_construction") = 200,
-            py::arg("random_seed") = 100,
-            py::arg("allow_replace_deleted") = false)
-        .def("knn_query",
-            &Index<float>::knnQuery_return_numpy,
-            py::arg("data"),
-            py::arg("k") = 1,
-            py::arg("num_threads") = -1,
-            py::arg("filter") = py::none())
-        .def("add_items",
-            &Index<float>::addItems,
-            py::arg("data"),
-            py::arg("ids") = py::none(),
-            py::arg("num_threads") = -1,
-            py::arg("replace_deleted") = false)
-        .def("get_items", &Index<float, float>::getDataReturnList, py::arg("ids") = py::none())
-        .def("get_ids_list", &Index<float>::getIdsList)
-        .def("set_ef", &Index<float>::set_ef, py::arg("ef"))
-        .def("set_num_threads", &Index<float>::set_num_threads, py::arg("num_threads"))
-        .def("save_index", &Index<float>::saveIndex, py::arg("path_to_index"))
-        .def("load_index",
-            &Index<float>::loadIndex,
-            py::arg("path_to_index"),
-            py::arg("max_elements") = 0,
-            py::arg("allow_replace_deleted") = false)
-        .def("mark_deleted", &Index<float>::markDeleted, py::arg("label"))
-        .def("unmark_deleted", &Index<float>::unmarkDeleted, py::arg("label"))
-        .def("resize_index", &Index<float>::resizeIndex, py::arg("new_size"))
-        .def("get_max_elements", &Index<float>::getMaxElements)
-        .def("get_current_count", &Index<float>::getCurrentCount)
-        .def_readonly("space", &Index<float>::space_name)
-        .def_readonly("dim", &Index<float>::dim)
-        .def_readwrite("num_threads", &Index<float>::num_threads_default)
+        .def("init_index", &Index<dist_t, data_t>::init_new_index, py::arg("max_elements"), py::arg("M")=16, py::arg("ef_construction")=200, py::arg("random_seed")=100)
+        .def("knn_query", &Index<dist_t, data_t>::knnQuery_return_numpy, py::arg("data"), py::arg("k")=1, py::arg("num_threads")=-1)
+        .def("add_items", &Index<dist_t, data_t>::addItems, py::arg("data"), py::arg("ids") = py::none(), py::arg("num_threads")=-1)
+        .def("get_items", &Index<dist_t, data_t>::getDataReturnNumpy, py::arg("ids") = py::none())
+        .def("get_ids_list", &Index<dist_t, data_t>::getIdsList)
+        .def("set_ef", &Index<dist_t, data_t>::set_ef, py::arg("ef"))
+        .def("set_num_threads", &Index<dist_t, data_t>::set_num_threads, py::arg("num_threads"))
+        .def("save_index", &Index<dist_t, data_t>::saveIndex, py::arg("path_to_index"))
+        .def("load_index", &Index<dist_t, data_t>::loadIndex, py::arg("path_to_index"), py::arg("max_elements")=0)
+        .def("mark_deleted", &Index<dist_t, data_t>::markDeleted, py::arg("label"))
+        .def("unmark_deleted", &Index<dist_t, data_t>::unmarkDeleted, py::arg("label"))
+        .def("resize_index", &Index<dist_t, data_t>::resizeIndex, py::arg("new_size"))
+        .def("get_max_elements", &Index<dist_t, data_t>::getMaxElements)
+        .def("get_current_count", &Index<dist_t, data_t>::getCurrentCount)
+        .def_readonly("space", &Index<dist_t, data_t>::space_name)
+        .def_readonly("dim", &Index<dist_t, data_t>::dim)
+        .def_readwrite("num_threads", &Index<dist_t, data_t>::num_threads_default)
         .def_property("ef",
-          [](const Index<float> & index) {
+          [](const Index<dist_t, data_t> & index) {
             return index.index_inited ? index.appr_alg->ef_ : index.default_ef;
           },
-          [](Index<float> & index, const size_t ef_) {
-            index.default_ef = ef_;
+          [](Index<dist_t, data_t> & index, const size_t ef_) {
+            index.default_ef=ef_;
             if (index.appr_alg)
               index.appr_alg->ef_ = ef_;
         })
-        .def_property_readonly("max_elements", [](const Index<float> & index) {
+        .def_property_readonly("max_elements", [](const Index<dist_t, data_t> & index) {
             return index.index_inited ? index.appr_alg->max_elements_ : 0;
         })
-        .def_property_readonly("element_count", [](const Index<float> & index) {
-            return index.index_inited ? (size_t)index.appr_alg->cur_element_count : 0;
+        .def_property_readonly("element_count", [](const Index<dist_t, data_t> & index) {
+            return index.index_inited ? index.appr_alg->cur_element_count : 0;
         })
-        .def_property_readonly("ef_construction", [](const Index<float> & index) {
+        .def_property_readonly("ef_construction", [](const Index<dist_t, data_t> & index) {
           return index.index_inited ? index.appr_alg->ef_construction_ : 0;
         })
-        .def_property_readonly("M",  [](const Index<float> & index) {
+        .def_property_readonly("M",  [](const Index<dist_t, data_t> & index) {
           return index.index_inited ? index.appr_alg->M_ : 0;
+        })
+        .def_property_readonly_static("distance_type",  [](py::object /* cls */) {
+          return typeName<dist_t>();
+        })
+        .def_property_readonly_static("data_type",  [](py::object /* cls */) {
+          return typeName<data_t>();
         })
 
         .def(py::pickle(
-            [](const Index<float> &ind) {  // __getstate__
+            [](const Index<dist_t, data_t> &ind) { // __getstate__
                 return py::make_tuple(ind.getIndexParams()); /* Return dict (wrapped in a tuple) that fully encodes state of the Index object */
             },
-            [](py::tuple t) {  // __setstate__
+            [](py::tuple t) { // __setstate__
                 if (t.size() != 1)
                     throw std::runtime_error("Invalid state!");
-                return Index<float>::createFromParams(t[0].cast<py::dict>());
-            }))
 
-        .def("__repr__", [](const Index<float> &a) {
-            return "<hnswlib.Index(space='" + a.space_name + "', dim="+std::to_string(a.dim)+")>";
+                return Index<dist_t, data_t>::createFromParams(t[0].cast<py::dict>());
+            }
+        ))
+
+        .def("__repr__", [className](const Index<dist_t, data_t> &a) {
+            return "<hnswlib." + className + "(space='" + a.space_name + "', dim=" + std::to_string(a.dim) + ") distance type " + typeName<dist_t>() + ", data type " + typeName<data_t>() + ">";
         });
+};
+
+
+PYBIND11_PLUGIN(hnswlib) {
+        py::module m("hnswlib");
+
+        register_index_class<float, float>(m, "Index");
+        register_index_class<double, double>(m, "DoubleIndex");
+
+        // Using an unsigned int as dist_t with char as data_t allows up to 65,536 dimensions before we overflow.
+        register_index_class<unsigned int, char>(m, "Int8Index");
+        register_index_class<unsigned int, unsigned char>(m, "UInt8Index");
+
+        // Using an unsigned int as dist_t with short as data_t allows up to 2^32 dimensions before we overflow.
+        register_index_class<unsigned long, short>(m, "Int16Index");
+        register_index_class<unsigned long, unsigned short>(m, "UInt16Index");
 
         py::class_<BFIndex<float>>(m, "BFIndex")
         .def(py::init<const std::string &, const int>(), py::arg("space"), py::arg("dim"))
         .def("init_index", &BFIndex<float>::init_new_index, py::arg("max_elements"))
-        .def("knn_query", &BFIndex<float>::knnQuery_return_numpy, py::arg("data"), py::arg("k") = 1, py::arg("filter") = py::none())
+        .def("knn_query", &BFIndex<float>::knnQuery_return_numpy, py::arg("data"), py::arg("k")=1)
         .def("add_items", &BFIndex<float>::addItems, py::arg("data"), py::arg("ids") = py::none())
         .def("delete_vector", &BFIndex<float>::deleteVector, py::arg("label"))
         .def("save_index", &BFIndex<float>::saveIndex, py::arg("path_to_index"))
-        .def("load_index", &BFIndex<float>::loadIndex, py::arg("path_to_index"), py::arg("max_elements") = 0)
+        .def("load_index", &BFIndex<float>::loadIndex, py::arg("path_to_index"), py::arg("max_elements")=0)
         .def("__repr__", [](const BFIndex<float> &a) {
             return "<hnswlib.BFIndex(space='" + a.space_name + "', dim="+std::to_string(a.dim)+")>";
         });

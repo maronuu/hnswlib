@@ -10,3 +10,7 @@ var/
 .vscode/
 .vs/
 **.DS_Store
+
+__pycache__
+tests/cpp/data
+.venv
