@@ -164,11 +164,11 @@ class Index {
     Index(const std::string &space_name, const int dim) : space_name(space_name), dim(dim) {
         normalize = false;
         if (space_name == "l2") {
-            l2space = new hnswlib::L2Space(dim);
+            l2space = new hnswlib::L2Space<dist_t, data_t>(dim);
         } else if (space_name == "ip") {
             l2space = new hnswlib::InnerProductSpace<dist_t, data_t>(dim);
         } else if (space_name == "cosine") {
-            l2space = new hnswlib::InnerProductSpace(dim);
+            l2space = new hnswlib::InnerProductSpace<dist_t, data_t>(dim);
             normalize = true;
         } else {
             throw std::runtime_error("Space name must be one of l2, ip, or cosine.");
@@ -743,11 +743,11 @@ class BFIndex {
     BFIndex(const std::string &space_name, const size_t dim) : space_name(space_name), dim(dim) {
         normalize = false;
         if (space_name == "l2") {
-            space = new hnswlib::L2Space(dim);
+            space = new hnswlib::L2Space<dist_t, data_t>(dim);
         } else if (space_name == "ip") {
             space = new hnswlib::InnerProductSpace<dist_t, data_t>(dim);
         } else if (space_name == "cosine") {
-            space = new hnswlib::InnerProductSpace(dim);
+            space = new hnswlib::InnerProductSpace<dist_t, data_t>(dim);
             normalize = true;
         } else {
             throw std::runtime_error("Space name must be one of l2, ip, or cosine.");
@@ -901,9 +901,6 @@ template<> const std::string typeName<float>() { return "float32"; }
 template<> const std::string typeName<long>() { return "int64"; }
 template<> const std::string typeName<unsigned long>() { return "uint64"; }
 template<> const std::string typeName<double>() { return "float64"; }
-
-template<typename dist_t, typename data_t>
-
 
 template<typename dist_t, typename data_t>
 inline void register_index_class(py::module &m, std::string className) {

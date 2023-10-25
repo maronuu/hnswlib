@@ -212,7 +212,7 @@ int main(int argc, char **argv) {
         printf("Loaded config: N=%d, d_mult=%d, Nq=%d, dim=%d, K=%d\n", N, dummy_data_multiplier, N_queries, d, K);
     }
 
-    hnswlib::L2Space l2space(d);
+    hnswlib::L2Space<float, float> l2space(d);
     hnswlib::HierarchicalNSW<float> appr_alg(&l2space, N + 1, M, efConstruction);
 
     std::vector<float> dummy_batch = load_batch<float>(path + "batch_dummy_00.bin", N * d);

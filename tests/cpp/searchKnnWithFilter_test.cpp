@@ -49,7 +49,7 @@ void test_some_filtering(hnswlib::BaseFilterFunctor& filter_func, size_t div_num
         query[i] = distrib(rng);
     }
 
-    hnswlib::L2Space space(d);
+    hnswlib::L2Space<float, float> space(d);
     hnswlib::AlgorithmInterface<float>* alg_brute  = new hnswlib::BruteforceSearch<float>(&space, 2 * n);
     hnswlib::AlgorithmInterface<float>* alg_hnsw = new hnswlib::HierarchicalNSW<float>(&space, 2 * n);
 
@@ -111,7 +111,7 @@ void test_none_filtering(hnswlib::BaseFilterFunctor& filter_func, size_t label_i
         query[i] = distrib(rng);
     }
 
-    hnswlib::L2Space space(d);
+    hnswlib::L2Space<float, float> space(d);
     hnswlib::AlgorithmInterface<float>* alg_brute  = new hnswlib::BruteforceSearch<float>(&space, 2 * n);
     hnswlib::AlgorithmInterface<float>* alg_hnsw = new hnswlib::HierarchicalNSW<float>(&space, 2 * n);
 

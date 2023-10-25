@@ -22,7 +22,7 @@ int main() {
     int ef_construction = 200;  // Controls index search speed/build speed tradeoff
 
     // Initing index
-    hnswlib::L2Space space(dim);
+    hnswlib::L2Space<float, float> space(dim);
     hnswlib::HierarchicalNSW<float>* alg_hnsw = new hnswlib::HierarchicalNSW<float>(&space, max_elements, M, ef_construction);
 
     // Generate random data

@@ -69,7 +69,7 @@ int main() {
     rng.seed(47);
     std::uniform_real_distribution<> distrib_real;
 
-    hnswlib::L2Space space(d);
+    hnswlib::L2Space<float, float> space(d);
 
     // generate batch1 and batch2 data
     float* batch1 = new float[d * max_elements];

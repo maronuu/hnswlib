@@ -34,7 +34,7 @@ void test() {
         query[i] = distrib(rng);
     }
 
-    hnswlib::L2Space space(d);
+    hnswlib::L2Space<float, float> space(d);
     hnswlib::AlgorithmInterface<float>* alg_brute  = new hnswlib::BruteforceSearch<float>(&space, 2 * n);
     hnswlib::AlgorithmInterface<float>* alg_hnsw = new hnswlib::HierarchicalNSW<float>(&space, 2 * n);
 

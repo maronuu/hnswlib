@@ -12,7 +12,7 @@ int main() {
     rng.seed(47);
     std::uniform_real_distribution<> distrib_real;
 
-    hnswlib::L2Space space(d);
+    hnswlib::L2Space<float, float> space(d);
     hnswlib::HierarchicalNSW<float>* alg_hnsw = new hnswlib::HierarchicalNSW<float>(&space, 2 * max_elements);
 
     std::cout << "Building index" << std::endl;
