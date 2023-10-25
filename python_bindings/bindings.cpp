@@ -909,15 +909,35 @@ inline void register_index_class(py::module &m, std::string className) {
            /* WARNING: Index::createFromIndex is not thread-safe with Index::addItems */
         .def(py::init(&Index<dist_t, data_t>::createFromIndex), py::arg("index"))
         .def(py::init<const std::string &, const int>(), py::arg("space"), py::arg("dim"))
-        .def("init_index", &Index<dist_t, data_t>::init_new_index, py::arg("max_elements"), py::arg("M")=16, py::arg("ef_construction")=200, py::arg("random_seed")=100)
-        .def("knn_query", &Index<dist_t, data_t>::knnQuery_return_numpy, py::arg("data"), py::arg("k")=1, py::arg("num_threads")=-1)
-        .def("add_items", &Index<dist_t, data_t>::addItems, py::arg("data"), py::arg("ids") = py::none(), py::arg("num_threads")=-1)
+        .def("init_index",
+            &Index<dist_t, data_t>::init_new_index,
+            py::arg("max_elements"),
+            py::arg("M") = 16,
+            py::arg("ef_construction") = 200,
+            py::arg("random_seed") = 100,
+            py::arg("allow_replace_deleted") = false)
+        .def("knn_query",
+            &Index<dist_t, data_t>::knnQuery_return_numpy,
+            py::arg("data"),
+            py::arg("k") = 1,
+            py::arg("num_threads") = -1,
+            py::arg("filter") = py::none())
+        .def("add_items",
+            &Index<dist_t, data_t>::addItems,
+            py::arg("data"),
+            py::arg("ids") = py::none(),
+            py::arg("num_threads") = -1,
+            py::arg("replace_deleted") = false)
         .def("get_items", &Index<dist_t, data_t>::getDataReturnNumpy, py::arg("ids") = py::none())
         .def("get_ids_list", &Index<dist_t, data_t>::getIdsList)
         .def("set_ef", &Index<dist_t, data_t>::set_ef, py::arg("ef"))
         .def("set_num_threads", &Index<dist_t, data_t>::set_num_threads, py::arg("num_threads"))
         .def("save_index", &Index<dist_t, data_t>::saveIndex, py::arg("path_to_index"))
-        .def("load_index", &Index<dist_t, data_t>::loadIndex, py::arg("path_to_index"), py::arg("max_elements")=0)
+        .def("load_index",
+            &Index<dist_t, data_t>::loadIndex,
+            py::arg("path_to_index"),
+            py::arg("max_elements") = 0,
+            py::arg("allow_replace_deleted") = false)
         .def("mark_deleted", &Index<dist_t, data_t>::markDeleted, py::arg("label"))
         .def("unmark_deleted", &Index<dist_t, data_t>::unmarkDeleted, py::arg("label"))
         .def("resize_index", &Index<dist_t, data_t>::resizeIndex, py::arg("new_size"))
@@ -931,7 +951,7 @@ inline void register_index_class(py::module &m, std::string className) {
             return index.index_inited ? index.appr_alg->ef_ : index.default_ef;
           },
           [](Index<dist_t, data_t> & index, const size_t ef_) {
-            index.default_ef=ef_;
+            index.default_ef = ef_;
             if (index.appr_alg)
               index.appr_alg->ef_ = ef_;
         })
@@ -939,7 +959,7 @@ inline void register_index_class(py::module &m, std::string className) {
             return index.index_inited ? index.appr_alg->max_elements_ : 0;
         })
         .def_property_readonly("element_count", [](const Index<dist_t, data_t> & index) {
-            return index.index_inited ? index.appr_alg->cur_element_count : 0;
+            return index.index_inited ? (size_t)index.appr_alg->cur_element_count : 0;
         })
         .def_property_readonly("ef_construction", [](const Index<dist_t, data_t> & index) {
           return index.index_inited ? index.appr_alg->ef_construction_ : 0;
@@ -947,27 +967,19 @@ inline void register_index_class(py::module &m, std::string className) {
         .def_property_readonly("M",  [](const Index<dist_t, data_t> & index) {
           return index.index_inited ? index.appr_alg->M_ : 0;
         })
-        .def_property_readonly_static("distance_type",  [](py::object /* cls */) {
-          return typeName<dist_t>();
-        })
-        .def_property_readonly_static("data_type",  [](py::object /* cls */) {
-          return typeName<data_t>();
-        })
 
         .def(py::pickle(
-            [](const Index<dist_t, data_t> &ind) { // __getstate__
+            [](const Index<dist_t, data_t> &ind) {  // __getstate__
                 return py::make_tuple(ind.getIndexParams()); /* Return dict (wrapped in a tuple) that fully encodes state of the Index object */
             },
-            [](py::tuple t) { // __setstate__
+            [](py::tuple t) {  // __setstate__
                 if (t.size() != 1)
                     throw std::runtime_error("Invalid state!");
-
                 return Index<dist_t, data_t>::createFromParams(t[0].cast<py::dict>());
-            }
-        ))
+            }))
 
-        .def("__repr__", [className](const Index<dist_t, data_t> &a) {
-            return "<hnswlib." + className + "(space='" + a.space_name + "', dim=" + std::to_string(a.dim) + ") distance type " + typeName<dist_t>() + ", data type " + typeName<data_t>() + ">";
+        .def("__repr__", [](const Index<dist_t, data_t> &a) {
+            return "<hnswlib.Index(space='" + a.space_name + "', dim="+std::to_string(a.dim)+")>";
         });
 };
 
@@ -986,16 +998,16 @@ PYBIND11_PLUGIN(hnswlib) {
         register_index_class<unsigned long, short>(m, "Int16Index");
         register_index_class<unsigned long, unsigned short>(m, "UInt16Index");
 
-        py::class_<BFIndex<float>>(m, "BFIndex")
-        .def(py::init<const std::string &, const int>(), py::arg("space"), py::arg("dim"))
-        .def("init_index", &BFIndex<float>::init_new_index, py::arg("max_elements"))
-        .def("knn_query", &BFIndex<float>::knnQuery_return_numpy, py::arg("data"), py::arg("k")=1)
-        .def("add_items", &BFIndex<float>::addItems, py::arg("data"), py::arg("ids") = py::none())
-        .def("delete_vector", &BFIndex<float>::deleteVector, py::arg("label"))
-        .def("save_index", &BFIndex<float>::saveIndex, py::arg("path_to_index"))
-        .def("load_index", &BFIndex<float>::loadIndex, py::arg("path_to_index"), py::arg("max_elements")=0)
-        .def("__repr__", [](const BFIndex<float> &a) {
-            return "<hnswlib.BFIndex(space='" + a.space_name + "', dim="+std::to_string(a.dim)+")>";
-        });
+        // py::class_<BFIndex<float, float>>(m, "BFIndex")
+        // .def(py::init<const std::string &, const int>(), py::arg("space"), py::arg("dim"))
+        // .def("init_index", &BFIndex<float, float>::init_new_index, py::arg("max_elements"))
+        // .def("knn_query", &BFIndex<float, float>::knnQuery_return_numpy, py::arg("data"), py::arg("k")=1)
+        // .def("add_items", &BFIndex<float, float>::addItems, py::arg("data"), py::arg("ids") = py::none())
+        // .def("delete_vector", &BFIndex<float, float>::deleteVector, py::arg("label"))
+        // .def("save_index", &BFIndex<float, float>::saveIndex, py::arg("path_to_index"))
+        // .def("load_index", &BFIndex<float, float>::loadIndex, py::arg("path_to_index"), py::arg("max_elements")=0)
+        // .def("__repr__", [](const BFIndex<float, float> &a) {
+        //     return "<hnswlib.BFIndex(space='" + a.space_name + "', dim="+std::to_string(a.dim)+")>";
+        // });
         return m.ptr();
 }
